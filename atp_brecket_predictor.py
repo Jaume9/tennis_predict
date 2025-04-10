@@ -5,12 +5,17 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import plot_tree
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 import joblib
 from pathlib import Path
 import glob
 import warnings
 warnings.filterwarnings('ignore')
+
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend that works without a display
+import matplotlib.pyplot as plt
 
 # Configure directories
 DATA_DIR = Path("data")
@@ -248,9 +253,9 @@ def train_decision_tree_model(features_df):
     
     # Train Decision Tree model
     dt_model = DecisionTreeClassifier(
-        max_depth=5,
-        min_samples_split=10,
-        min_samples_leaf=5,
+        max_depth=30,
+        min_samples_split=5,
+        min_samples_leaf=3,
         random_state=42
     )
     dt_model.fit(X_train, y_train)
@@ -279,6 +284,42 @@ def train_decision_tree_model(features_df):
     plt.tight_layout()
     plt.savefig('dt_feature_importance.png')
     
+    # Visualize the decision tree structure
+    try:
+        plt.figure(figsize=(20, 10))  # Large figure for the tree
+        plot_tree(dt_model, 
+                filled=True, 
+                feature_names=X.columns, 
+                class_names=['Worse Rank Wins', 'Better Rank Wins'], 
+                rounded=True,
+                max_depth=3)  # Limiting depth for readability
+        plt.title('Decision Tree Visualization (Limited to Depth 3)')
+        plt.tight_layout()
+        
+        # Save with absolute path
+        import os
+        save_path = os.path.abspath('decision_tree_visualization.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Decision tree structure saved to: {save_path}")
+        plt.close()
+
+        # Full tree (may be very large)
+        plt.figure(figsize=(25, 20))
+        plot_tree(dt_model, 
+                filled=True, 
+                feature_names=X.columns, 
+                class_names=['Worse Rank Wins', 'Better Rank Wins'], 
+                rounded=True)
+        plt.title('Complete Decision Tree Visualization')
+        plt.tight_layout()
+        
+        full_save_path = os.path.abspath('complete_decision_tree.png')
+        plt.savefig(full_save_path, dpi=300, bbox_inches='tight')
+        print(f"Complete decision tree saved to: {full_save_path}")
+        plt.close()
+    except Exception as e:
+        print(f"Error generating tree visualizations: {str(e)}")
+
     return dt_model
 
 def find_player_by_name(df, player_name):
@@ -586,15 +627,19 @@ def main():
                 players.append(player_data)
                 print(f"Found: {player_data['name']} (Rank: {player_data['rank']})")
             else:
-                # Create synthetic player if features not found
-                print(f"Player {name} found but no recent matches, using default stats")
+                # Create synthetic player with randomized stats
+                not_found_count += 1
+                print(f"Player not found: {name}, using randomized default stats")
+
+                # Add some random variation to make predictions meaningful
+                import random
                 player_data = {
-                    'id': player_id,
-                    'name': full_name or name,
-                    'rank': 100,
-                    'elo': 1500,
-                    'surface_elo': 1500,
-                    'recent_winrate': 0.5
+                    'id': -not_found_count,
+                    'name': name,
+                    'rank': random.randint(50, 300),  # Random ranking between 50-300
+                    'elo': random.uniform(1400, 1600),  # Random ELO between 1400-1600
+                    'surface_elo': random.uniform(1380, 1620),  # Random surface ELO
+                    'recent_winrate': random.uniform(0.35, 0.65)  # Random winrate between 35-65%
                 }
                 players.append(player_data)
         else:
