@@ -14,14 +14,100 @@ round_mapping = {
     'QF': 3, 'SF': 2, 'F': 1, 'RR': 0
 }
 
-def load_data():
-    files = glob.glob('./data/atp_matches_*.csv')
-    dfs = []
-    for f in files:
-        # Especificar dtype para columnas problemáticas
-        dfs.append(pd.read_csv(f, low_memory=False))
+def load_data(years_back=5):
+    """Carga sólo los datos de los últimos n años para mayor eficiencia"""
+    current_year = 2025  # Ajustar según la fecha actual
+    start_year = current_year - years_back
+    
+    # Sólo cargar archivos de los últimos años
+    files = [f for f in glob.glob('./data/atp_matches_*.csv') 
+             if f'atp_matches_{start_year}' in f or 
+                any(f'atp_matches_{year}' in f for year in range(start_year+1, current_year+1))]
+    
+    if not files:  # Si no hay archivos específicos, cargar todos
+        files = glob.glob('./data/atp_matches_*.csv')
+    
+    print(f"Cargando {len(files)} archivos de datos...")
+    dfs = [pd.read_csv(f, low_memory=False) for f in files]
     data = pd.concat(dfs, ignore_index=True)
     return data
+
+def create_player_lookup_dict(data):
+    """Crea un diccionario para búsqueda rápida de jugadores"""
+    player_dict = {}
+    
+    # Procesar ganadores
+    if 'winner_name' in data.columns:
+        for _, row in data.iterrows():
+            if pd.notna(row['winner_name']):
+                name = row['winner_name'].lower()
+                if name not in player_dict or row['tourney_date'] > player_dict[name]['date']:
+                    player_dict[name] = {
+                        'date': row['tourney_date'],
+                        'name': row['winner_name'],
+                        'id': row['winner_id'],
+                        'hand': row['winner_hand'] if pd.notna(row['winner_hand']) else 'R',
+                        'ht': float(row['winner_ht']) if pd.notna(row['winner_ht']) else 185.0,
+                        'ioc': row['winner_ioc'] if pd.notna(row['winner_ioc']) else 'UNK',
+                        'age': float(row['winner_age']) if pd.notna(row['winner_age']) else 25.0,
+                        'rank': int(row['winner_rank']) if pd.notna(row['winner_rank']) else 100,
+                        'rank_points': float(row['winner_rank_points']) if pd.notna(row['winner_rank_points']) else 500.0
+                    }
+    
+    # Procesar perdedores (sólo si tienen datos más recientes)
+    if 'loser_name' in data.columns:
+        for _, row in data.iterrows():
+            if pd.notna(row['loser_name']):
+                name = row['loser_name'].lower()
+                if name not in player_dict or row['tourney_date'] > player_dict[name]['date']:
+                    player_dict[name] = {
+                        'date': row['tourney_date'],
+                        'name': row['loser_name'],
+                        'id': row['loser_id'],
+                        'hand': row['loser_hand'] if pd.notna(row['loser_hand']) else 'R',
+                        'ht': float(row['loser_ht']) if pd.notna(row['loser_ht']) else 185.0,
+                        'ioc': row['loser_ioc'] if pd.notna(row['loser_ioc']) else 'UNK',
+                        'age': float(row['loser_age']) if pd.notna(row['loser_age']) else 25.0,
+                        'rank': int(row['loser_rank']) if pd.notna(row['loser_rank']) else 150,
+                        'rank_points': float(row['loser_rank_points']) if pd.notna(row['loser_rank_points']) else 300.0
+                    }
+    
+    return player_dict
+
+def find_player_by_name_fast(name, player_dict):
+    """Busca un jugador usando el diccionario precompilado"""
+    # Búsqueda exacta
+    if name.lower() in player_dict:
+        player_data = player_dict[name.lower()]
+        return {
+            'name': player_data['name'],
+            'id': player_data['id'],
+            'hand': player_data['hand'],
+            'ht': player_data['ht'],
+            'ioc': player_data['ioc'],
+            'age': player_data['age'],
+            'rank': player_data['rank'],
+            'rank_points': player_data['rank_points'],
+            'seed': 999  # Valor por defecto
+        }
+    
+    # Búsqueda parcial
+    for key, player_data in player_dict.items():
+        if name.lower() in key:
+            return {
+                'name': player_data['name'],
+                'id': player_data['id'],
+                'hand': player_data['hand'],
+                'ht': player_data['ht'],
+                'ioc': player_data['ioc'],
+                'age': player_data['age'],
+                'rank': player_data['rank'],
+                'rank_points': player_data['rank_points'],
+                'seed': 999  # Valor por defecto
+            }
+    
+    # No encontrado
+    return None
 
 def preprocess_data(data):
     # Crear dataset balanceado
@@ -191,62 +277,58 @@ def train_model(data):
     data['round'] = data['round'].replace(round_mapping).fillna(0).astype(int)
     data['draw_size'] = data['draw_size'].fillna(128).astype(int)
     data['best_of'] = data['best_of'].fillna(3).astype(int)
-    categorical_features = ['surface', 'tourney_level', 
-                           'p1_hand', 'p2_hand', 'p1_ioc', 'p2_ioc']
     
+    # Convertir todo a string una sola vez
+    categorical_features = ['surface', 'tourney_level', 'p1_hand', 'p2_hand', 'p1_ioc', 'p2_ioc']
     for col in categorical_features:
         data[col] = data[col].astype(str)
-
-    
+        
     features = ['surface', 'tourney_level', 'draw_size', 'best_of', 'round',
                 'p1_seed', 'p1_hand', 'p1_ht', 'p1_ioc', 'p1_age', 
                 'p1_rank', 'p1_rank_points',
                 'p2_seed', 'p2_hand', 'p2_ht', 'p2_ioc', 'p2_age',
                 'p2_rank', 'p2_rank_points']
-
+    
     numeric_features = ['draw_size', 'best_of', 'round',
                         'p1_ht', 'p1_age', 'p1_rank', 'p1_rank_points',
                         'p2_ht', 'p2_age', 'p2_rank', 'p2_rank_points']
     
-    categorical_features = ['surface', 'tourney_level', 
-                           'p1_hand', 'p2_hand', 'p1_ioc', 'p2_ioc']
-    
-    # Nuevo: Pipeline para semillas
+    # Para semillas
     seed_features = ['p1_seed', 'p2_seed']
 
+    # Simplificar el preprocesador para ser más eficiente
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', Pipeline([
-                ('imputer', SimpleImputer(strategy='median')),
-                ('float_converter', FunctionTransformer(lambda x: x.astype(np.float64)))
-            ]), numeric_features),
-            ('seed', Pipeline([
-                ('imputer', SimpleImputer(strategy='constant', fill_value=999.0)),  # Cambiar a float
-                ('float_converter', FunctionTransformer(lambda x: x.astype(np.float64)))
-            ]), seed_features),
-            ('cat', OneHotEncoder(handle_unknown='ignore', max_categories=20), categorical_features)
+            ('num', SimpleImputer(strategy='median'), numeric_features),
+            ('seed', SimpleImputer(strategy='constant', fill_value=999.0), seed_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
         ],
         remainder='drop',
-        n_jobs=-1
+        n_jobs=-1,
+        verbose_feature_names_out=False  # Reduce overhead en nombres de columnas
     )
 
-    # Modelo optimizado
+    # Modelo optimizado para velocidad
     model = Pipeline([
         ('preprocessor', preprocessor),
         ('classifier', RandomForestClassifier(
-            n_estimators=50,  # Reducir de 200 a 50
-            max_depth=10,     # Limitar profundidad
-            max_samples=0.2,  # Usar sólo 20% de datos por árbol
-            n_jobs=-1,        # Usar todos los núcleos
-            verbose=2,        # Más detalle en progreso
-            random_state=42
+            n_estimators=50,
+            max_depth=10,
+            min_samples_split=30,  # Reduce complejidad
+            max_features='sqrt',   # Más eficiente
+            bootstrap=True,
+            n_jobs=-1,
+            random_state=42,
+            verbose=0,            # Reducir verbosidad para mayor velocidad
+            warm_start=False      # Más rápido para un solo entrenamiento
         ))
     ])
 
-    # Reducir dataset para entrenamiento inicial
-    sample_data = data.sample(frac=0.3, random_state=42) if len(data) > 100000 else data
+    # Usar menos datos para entrenamiento rápido si el dataset es grande
+    sample_size = min(100000, len(data))  # Máximo 100k muestras
+    sample_data = data.sample(n=sample_size, random_state=42) if len(data) > sample_size else data
     
-    print("Iniciando entrenamiento...")
+    print(f"Iniciando entrenamiento con {len(sample_data)} muestras...")
     model.fit(sample_data[features], sample_data['target'])
     return model
 
@@ -258,7 +340,10 @@ def simulate_tournament(players, model, surface='Hard', tourney_level='G'):
     while len(bracket) > 1:
         print(f"\n--- Ronda Actual: {round_number} ({len(bracket)} jugadores) ---")
         next_round = []
+        batch_data = []
+        match_pairs = []
         
+        # Preparar todos los partidos de la ronda
         for i in range(0, len(bracket), 2):
             if i+1 >= len(bracket):
                 next_round.append(bracket[i])
@@ -267,14 +352,14 @@ def simulate_tournament(players, model, surface='Hard', tourney_level='G'):
                 
             p1 = bracket[i]
             p2 = bracket[i+1]
+            match_pairs.append((p1, p2))
             
-            # Crear features del partido
-            match = pd.DataFrame([{
+            batch_data.append({
                 'surface': surface,
                 'tourney_level': tourney_level,
-                'draw_size': float(len(bracket)),  # Convertir a float
-                'best_of': 3.0,  # float
-                'round': float(round_number),  # float
+                'draw_size': float(len(bracket)),
+                'best_of': 3.0,
+                'round': float(round_number),
                 'p1_seed': float(p1['seed']),
                 'p1_hand': p1['hand'],
                 'p1_ht': float(p1['ht']),
@@ -289,14 +374,18 @@ def simulate_tournament(players, model, surface='Hard', tourney_level='G'):
                 'p2_age': float(p2['age']),
                 'p2_rank': float(p2['rank']),
                 'p2_rank_points': float(p2['rank_points'])
-            }])
+            })
             
-            # Predecir ganador
-            prob = model.predict_proba(match)[0][1]
-            winner = p1 if prob >= 0.5 else p2
-            loser = p2 if prob >= 0.5 else p1
-            next_round.append(winner)
-            print(f"{p1['name']} vs {p2['name']} => {winner['name']} gana (probabilidad: {prob:.2f if prob >= 0.5 else 1-prob:.2f})")
+        # Hacer predicciones en lote si hay partidos
+        if batch_data:
+            batch_df = pd.DataFrame(batch_data)
+            probabilities = model.predict_proba(batch_df)[:, 1]
+            
+            # Procesar los resultados
+            for idx, ((p1, p2), prob) in enumerate(zip(match_pairs, probabilities)):
+                winner = p1 if prob >= 0.5 else p2
+                next_round.append(winner)
+                print(f"{p1['name']} vs {p2['name']} => {winner['name']} gana (probabilidad: {(prob if prob >= 0.5 else 1 - prob):.2f})")
         
         bracket = next_round
         round_number -= 1  # Avanzar a la siguiente ronda
@@ -304,12 +393,13 @@ def simulate_tournament(players, model, surface='Hard', tourney_level='G'):
     return bracket[0]
 
 if __name__ == "__main__":
-    # Cargar datos y entrenar modelo
+    # Cargar datos de manera más eficiente
     print("Cargando datos...")
-    historical_data = load_data()
-
-    # Limitar a los últimos 5 años para prueba inicial
-    historical_data = historical_data[historical_data['tourney_date'] >= 20180000]
+    historical_data = load_data(years_back=5)  # Solo últimos 5 años
+    
+    # Crear diccionario para búsqueda rápida
+    print("Creando índice de jugadores...")
+    player_dict = create_player_lookup_dict(historical_data)
     
     # Preprocesar datos para el entrenamiento
     print("Preprocesando datos...")
@@ -330,30 +420,26 @@ if __name__ == "__main__":
     not_found_count = 1
     
     print("\nIntroduce los nombres de los jugadores (uno por línea, 'fin' para terminar):")
-    print("Ejemplo: 'Rafael Nadal', 'Novak Djokovic', etc.")
     
     while True:
         name = input(f"Jugador #{len(players)+1} (o 'fin' para terminar): ")
         if name.lower() == 'fin':
             break
             
-        # Buscar datos del jugador
-        player_data = find_player_by_name(name, historical_data)
+        # Buscar datos del jugador con el método optimizado
+        player_data = find_player_by_name_fast(name, player_dict)
         
         if player_data:
-            # Si se encontró el jugador, asignar seed según el orden de ingreso
             player_data['seed'] = len(players) + 1
             print(f"Jugador encontrado: {player_data['name']} (Rank: {player_data['rank']}, {player_data['ioc']})")
             players.append(player_data)
         else:
-            # Si no se encontró, generar datos aleatorios
             print(f"Jugador '{name}' no encontrado. Generando datos aleatorios.")
             random_player = generate_random_player(name, not_found_count)
             random_player['seed'] = len(players) + 1
             players.append(random_player)
             not_found_count += 1
             
-        # Terminar si tenemos suficientes jugadores para un torneo
         if len(players) >= 128:
             print("Límite de 128 jugadores alcanzado.")
             break
