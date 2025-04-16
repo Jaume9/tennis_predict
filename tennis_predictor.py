@@ -6,7 +6,7 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
-from xgboost import XGBClassifier
+from atp_xgbost import XGBClassifier
 import joblib
 from pathlib import Path
 import glob
